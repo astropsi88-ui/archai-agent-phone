@@ -1,5 +1,8 @@
 # ARCH_AI Agent Phone
 
+> **EXPERIMENTAL DEVELOPMENT KIT — NOT A FINISHED PRODUCT.**
+> End-to-end acceptance of the real application, including agent work dispatch and results, is incomplete. The code is currently for developer evaluation and further development. Published source and passing local tests do not establish production readiness.
+
 Connect a phone PWA to your existing agent, sharing its server-side conversation and memory.
 
 This is an open developer kit accompanying ARCH_AI's practical demonstration of talking to an agent through a separate phone app. It is an additional web entrypoint; network availability depends on your domain, hosting and providers.
