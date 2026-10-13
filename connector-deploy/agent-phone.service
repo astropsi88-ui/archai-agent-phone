@@ -1,0 +1,20 @@
+# UNTESTED template. Create dedicated user/directories; validate before enabling.
+[Unit]
+Description=Phone connector for existing agent
+After=network.target
+[Service]
+User=agentphone
+Group=agentphone
+WorkingDirectory=/srv/agent-phone/connector
+EnvironmentFile=/srv/agent-phone/private/connector.env
+ExecStart=/usr/bin/python3 /srv/agent-phone/connector/server.py --port 8765
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/agent-phone/private
+[Install]
+WantedBy=multi-user.target

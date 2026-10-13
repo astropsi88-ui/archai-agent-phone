@@ -1,0 +1,10 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172c35"><title>Мой агент — телефон</title><link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head><body><main>
+<header><h1>Мой агент</h1><p>Тот же разговор. Теперь и в телефоне.</p></header>
+<p id="status" role="status" aria-live="polite">Проверяю подключение…</p>
+<form id="login"><label for="phrase">Личная фраза входа</label><input id="phrase" type="password" autocomplete="current-password" minlength="12" maxlength="256" required><button id="enter">Войти</button></form>
+<section id="room" hidden><nav><button id="refresh" type="button">Обновить историю / проверить ответ</button><button id="logout" type="button">Выйти</button></nav><p id="identity"></p><ol id="history" aria-label="История существующего агента"></ol>
+<form id="compose"><label for="message">Сообщение</label><textarea id="message" rows="3" maxlength="2000"></textarea><button id="send">Отправить</button></form>
+<button id="call" class="phone" type="button">☎ Трубочка</button>
+<section id="phone" hidden aria-label="Голосовой разговор"><h2>На связи</h2><p id="voice-note">Нажмите запись, скажите одну реплику и остановите её. Ответ прозвучит здесь синтезированным AI-голосом.</p><p id="phase" aria-live="polite">Готов к записи</p><button id="record" type="button">● Записать</button><button id="stop" type="button" disabled>■ Стоп и отправить</button><button id="interrupt" type="button">Прервать / положить трубку</button><button id="play" type="button" hidden>▶ Послушать полученный ответ</button></section></section>
+<p class="small">История приходит с сервера вашего существующего агента. Запросы не отправляются повторно автоматически. Код бесплатный; сервер и голосовые провайдеры могут стоить денег.</p>
+</main></body></html>
