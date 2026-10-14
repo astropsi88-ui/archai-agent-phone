@@ -7,11 +7,13 @@ import hmac
 import json
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from contract import CallableAdapter,Fault
+from files import Files, file_ids
 
 def make_bridge(existing_service, *, agent_id, conversation_id, owner_id, token, port=8766):
     if not token or len(token)<24:raise ValueError('Private connector token required')
     adapter=CallableAdapter(existing_service,agent_id,conversation_id,owner_id)
     adapter.describe()
+    files=Files(adapter)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def do_POST(self):
@@ -23,23 +25,27 @@ def make_bridge(existing_service, *, agent_id, conversation_id, owner_id, token,
                 if not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token):raise Fault(401,'connector_auth_required')
                 if self.headers.get('Content-Type')!='application/json':raise Fault(415,'json_required')
                 n=int(self.headers.get('Content-Length','0'))
-                if self.headers.get('Transfer-Encoding') or not 0<n<=16384:raise Fault(413,'body_size')
+                if self.headers.get('Transfer-Encoding') or not 0<n<=(1500000 if self.path=='/connector/file_chunk' else 16384):raise Fault(413,'body_size')
                 p=json.loads(self.rfile.read(n))
                 if not isinstance(p,dict):raise Fault(400,'invalid_body')
                 if any(p.get(k)!=v for k,v in adapter.identity.items()):raise Fault(403,'binding_mismatch')
                 op=self.path.removeprefix('/connector/')
-                if self.path!='/connector/'+op or op not in ('describe','history','turn'):raise Fault(404,'not_found')
+                if self.path!='/connector/'+op or op not in ('describe','history','turn','file_begin','file_chunk','file_finish','file_status'):raise Fault(404,'not_found')
                 if op=='turn':
                     import threading,time
                     from voice import valid_id
                     valid_id(p.get('requestId'))
-                    if not isinstance(p.get('message'),str) or not 1<=len(p['message'])<=2000 or p.get('channel') not in ('phone-voice','phone-text'):raise Fault(400,'invalid_turn')
+                    ids=file_ids(p.get('fileIds',[]))
+                    if ids:files.validate_ready(ids)
+                    if not isinstance(p.get('message'),str) or not (0<=len(p['message'])<=2000 and (p['message'].strip() or ids)) or p.get('channel') not in ('phone-voice','phone-text'):raise Fault(400,'invalid_turn')
                     cancel=threading.Event();timer=threading.Timer(15,cancel.set);timer.daemon=True;timer.start()
-                    try:result=adapter.turn(p['message'],p['requestId'],p['channel'],cancel,time.monotonic()+15)
+                    try:result=adapter.turn(p['message'],p['requestId'],p['channel'],cancel,time.monotonic()+15,ids)
                     finally:timer.cancel()
+                elif op.startswith('file_'):
+                    result=files.call(op.removeprefix('file_'),{k:v for k,v in p.items() if k not in adapter.identity})
                 else:result=getattr(adapter,op)()
                 # Return only allowed public fields plus server binding; never raw runtime internals.
-                result={**result,'ownerId':owner_id}
+                result={**result,**adapter.identity}
             except Fault as e:status,result=e.status,{'error':e.code}
             except Exception:status,result=500,{'error':'runtime_bridge_failed'}
             raw=json.dumps(result).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.end_headers()

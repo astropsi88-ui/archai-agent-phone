@@ -3,6 +3,7 @@ import json
 import threading
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 class Fault(Exception):
     def __init__(self, status, code): self.status, self.code = status, code
@@ -28,6 +29,7 @@ class BoundAdapter:
             out['messages'] = [self.message(m) for m in result['messages']]
         if 'message' in result: out['message'] = self.message(result['message'])
         if 'replayed' in result: out['replayed'] = bool(result['replayed'])
+        if result.get('attachments') is True: out['attachments'] = True
         return out
 
     @staticmethod
@@ -39,9 +41,10 @@ class BoundAdapter:
 
     def describe(self): return self.public(self.call('describe', self.payload()))
     def history(self): return self.public(self.call('history', self.payload(limit=100)))
-    def turn(self, text, request_id, channel, cancel, deadline):
+    def turn(self, text, request_id, channel, cancel, deadline, file_ids=None):
         if cancel.is_set(): raise Fault(409, 'turn_cancelled')
-        result = self.call('turn', self.payload(message=text, requestId=request_id, channel=channel), cancel, deadline)
+        extra = {'fileIds': file_ids} if file_ids else {}
+        result = self.call('turn', self.payload(message=text, requestId=request_id, channel=channel, **extra), cancel, deadline)
         return self.public(result)
 
 class CallableAdapter(BoundAdapter):
@@ -82,6 +85,11 @@ class HTTPAdapter(BoundAdapter):
             if len(raw)>262144: raise ValueError()
             return self.validate(json.loads(raw))
         except Fault: raise
+        except HTTPError as e:
+            # A read-only missing-upload result permits BEGIN, never a blind replay.
+            if operation == 'file_status' and e.code == 404:
+                raise Fault(404,'file_missing') from None
+            raise Fault(502,'existing_agent_unavailable_refresh_history_no_auto_retry') from None
         except Exception: raise Fault(502,'existing_agent_unavailable_refresh_history_no_auto_retry') from None
 
 class Unconfigured(BoundAdapter):

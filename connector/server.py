@@ -15,9 +15,10 @@ from urllib.parse import urlsplit
 from contract import Fault, HTTPAdapter, Unconfigured
 from providers import STT,TTS,MockSTT,MockTTS,OpenAISTT,OpenAITTS
 from voice import Turns
+from files import Files, LIMITS, CHUNK
 ROOT=Path(__file__).resolve().parent
 PUBLIC=ROOT/'public'
-STATIC = {'/': ('index.html', 'text/html; charset=utf-8'),
+STATIC = {'/app.007dec0ba9ecd8f8.js': ('app.007dec0ba9ecd8f8.js', 'text/javascript; charset=utf-8'), '/': ('index.html', 'text/html; charset=utf-8'),
           '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
           '/draft.js': ('draft.js', 'text/javascript; charset=utf-8'),
           '/style.css': ('style.css', 'text/css; charset=utf-8'),
@@ -95,7 +96,8 @@ def make_server(settings,adapter=None,stt=None,tts=None):
         adapter=HTTPAdapter(settings.agent_url,settings.agent_token,settings.agent_id,settings.conversation_id,settings.owner_id) if settings.agent_url else Unconfigured()
     store=Store(settings.data,adapter.identity)
     stt=stt or (MockSTT() if settings.mock_voice else settings.stt);tts=tts or (MockTTS() if settings.mock_voice else settings.tts)
-    turns=Turns(settings,store,adapter,stt,tts);attempts=[];auth_lock=threading.Lock()
+    files=Files(adapter)
+    turns=Turns(settings,store,adapter,stt,tts,files);attempts=[];auth_lock=threading.Lock()
     class Handler(BaseHTTPRequestHandler):
         server_version='ExistingAgentPhone'
         def log_message(self,*args):pass
@@ -137,7 +139,7 @@ def make_server(settings,adapter=None,stt=None,tts=None):
                 if self.headers.get('Content-Type','').split(';')[0]!='application/json':raise Fault(415,'json_required')
                 try:length=int(self.headers.get('Content-Length','0'))
                 except ValueError:raise Fault(400,'invalid_length') from None
-                if self.headers.get('Transfer-Encoding') or not 0<length<=(1500000 if path=='/api/turn' else 16384):raise Fault(413,'body_size')
+                if self.headers.get('Transfer-Encoding') or not 0<length<=(1500000 if path in ('/api/turn','/api/files/chunk') else 16384):raise Fault(413,'body_size')
                 try:
                     body=json.loads(self.rfile.read(length))
                     if not isinstance(body,dict):raise ValueError()
@@ -156,8 +158,12 @@ def make_server(settings,adapter=None,stt=None,tts=None):
             if not store.session(token):raise Fault(401,'owner_session_required')
             if path=='/api/session' and self.command=='GET':
                 binding=adapter.describe()
-                return self.respond(200,{**binding,'ownerAuthenticated':True,'voiceEnabled':settings.voice,'mockVoice':settings.mock_voice,'maxSeconds':30})
+                return self.respond(200,{**binding,'ownerAuthenticated':True,'voiceEnabled':settings.voice,'mockVoice':settings.mock_voice,'maxSeconds':30,'fileLimits':LIMITS,'chunkBytes':CHUNK})
             if path=='/api/history' and self.command=='GET':return self.respond(200,adapter.history())
+            if path in ('/api/files/begin','/api/files/chunk','/api/files/finish') and self.command=='POST':
+                return self.respond(200,files.call(path.rsplit('/',1)[1],body))
+            if path.startswith('/api/files/') and self.command=='GET':
+                return self.respond(200,files.call('status',{'uploadId':path.rsplit('/',1)[1]}))
             if path=='/api/turn' and self.command=='POST':return self.respond(202,turns.submit(body))
             if path=='/api/turn/cancel' and self.command=='POST':return self.respond(200,turns.cancel(body.get('requestId')))
             if path.startswith('/api/turn/') and self.command=='GET':

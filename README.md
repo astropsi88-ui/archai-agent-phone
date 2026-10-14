@@ -64,3 +64,7 @@ python3 -m unittest discover -s tests -p test_connector.py -v
 An open developer kit that connects a phone PWA to your existing agent runtime, using the same server-side conversation and memory. Includes text, optional STT → agent → TTS, a pinned owner binding, HTTP/callable adapters and deployment guides. Start with [README.en.md](README.en.md).
 
 MIT License · © 2026 ARCH_AI · [License](LICENSE)
+
+## Обновление 14 октября 2026
+
+Перенесены вложения без текста / с текстом / с завершённым голосом, передача больших файлов кусками, короткие статусы, сохраняемые переключатели сигнала и ответа голосом, обновляемая оболочка PWA. Файловая возможность включается только после подключения вашего существующего runtime. Точный модуль правки чтения PDF сохранён как reference для composer. [Что изменилось и как подключить](route/07_ATTACHMENTS_AND_UPDATES.md). Пометка тестовой разработки сохраняется; личная проверка Вика не является приёмкой публичного комплекта.

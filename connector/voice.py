@@ -29,8 +29,9 @@ def decode_wav(encoded):
     except (ValueError,TypeError,wave.Error,EOFError): raise Fault(400,'wav_mono_16khz_025_to_30_seconds_required') from None
 
 class Turns:
-    def __init__(self,settings,store,adapter,stt,tts):
+    def __init__(self,settings,store,adapter,stt,tts,files=None):
         self.s,self.store,self.adapter,self.stt,self.tts=settings,store,adapter,stt,tts
+        self.files=files
         self.lock=store.lock; self.active=None; self.events={}; self.results={}; self.audio={}
         with self.lock:
             store.db.executescript('CREATE TABLE IF NOT EXISTS turns (id TEXT PRIMARY KEY, fingerprint TEXT, status TEXT); CREATE TABLE IF NOT EXISTS budget(day TEXT PRIMARY KEY, count INTEGER);')
@@ -62,12 +63,16 @@ class Turns:
     def submit(self,body):
         rid=valid_id(body.get('requestId'))
         if any(body.get(k)!=self.adapter.identity.get(k) for k in ('agentId','conversationId')): raise Fault(403,'agent_or_conversation_mismatch')
+        from files import file_ids
+        ids=file_ids(body.get('fileIds',[]))
+        speak=body.get('replyVoice','audio' in body)
+        if type(speak) is not bool:raise Fault(400,'invalid_reply_voice')
         audio='audio' in body
         if audio and 'message' in body: raise Fault(400,'single_input_required')
         value=decode_wav(body['audio']) if audio else body.get('message')
-        if not audio and (not isinstance(value,str) or not 1<=len(value.strip())<=2000): raise Fault(400,'message_length')
+        if not audio and (not isinstance(value,str) or not (0<=len(value.strip())<=2000 and (value.strip() or ids))): raise Fault(400,'message_length')
         if not audio:value=value.strip()
-        fingerprint=hashlib.sha256((b'audio:'+value) if audio else ('text:'+value).encode()).hexdigest()
+        fingerprint=hashlib.sha256(((b'audio:'+value) if audio else ('text:'+value).encode())+json.dumps({'fileIds':ids,'replyVoice':speak},sort_keys=True).encode()).hexdigest()
         with self.lock:
             old=self.row(rid)
             if old:
@@ -76,14 +81,20 @@ class Turns:
             if self.active:raise Fault(409,'turn_busy_no_queue')
             if audio:
                 if not self.s.voice:raise Fault(503,'voice_disabled')
-                self.stt.ready();self.tts.ready()
+                self.stt.ready()
+            if speak:
+                if not self.s.voice:raise Fault(503,'voice_disabled')
+                self.tts.ready()
+            if ids:
+                if not self.files:raise Fault(503,'existing_runtime_attachments_not_configured')
+                self.files.validate_ready(ids)
             self.adapter.describe() # Confirm canonical binding before reserving budget.
             self.pace()
             self.store.db.execute('INSERT INTO turns VALUES (?,?,?)',(rid,fingerprint,'queued'));self.store.db.commit()
             cancel=threading.Event();self.events[rid]=cancel;self.active=rid
             deadline=time.monotonic()+self.s.turn_timeout
             timer=threading.Timer(self.s.turn_timeout,lambda:self.cancel(rid,'timed_out'));timer.daemon=True;timer.start()
-            threading.Thread(target=self.run,args=(rid,value,audio,cancel,deadline,timer),daemon=True).start()
+            threading.Thread(target=self.run,args=(rid,value,audio,cancel,deadline,timer,ids,speak),daemon=True).start()
             return {'requestId':rid,'status':'queued'}
     def cancel(self,rid,state='cancelled'):
         valid_id(rid)
@@ -96,7 +107,7 @@ class Turns:
                 self.store.db.execute('UPDATE turns SET status=? WHERE id=?',(state,rid))
             self.store.db.commit();self.audio.pop(rid,None);self.results.pop(rid,None)
         return {'requestId':rid,'status':state}
-    def run(self,rid,value,is_audio,cancel,deadline,timer):
+    def run(self,rid,value,is_audio,cancel,deadline,timer,ids,speak):
         result={}
         def remaining():
             if cancel.is_set() or time.monotonic()>=deadline: raise Fault(409,'turn_cancelled_or_timeout')
@@ -108,9 +119,9 @@ class Turns:
                 result['transcript']=text
             else:text=value
             remaining();self.set(rid,'thinking',result)
-            reply=self.adapter.turn(text,rid,'phone-voice' if is_audio else 'phone-text',cancel,deadline)
+            reply=self.adapter.turn(text,rid,'phone-voice' if is_audio else 'phone-text',cancel,deadline,ids)
             remaining();result.update(reply)
-            if is_audio:
+            if speak:
                 self.set(rid,'speaking',result)
                 raw,mime=self.tts.synthesize(reply['message']['content'],remaining());remaining()
                 with self.lock:

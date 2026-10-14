@@ -34,3 +34,7 @@ Tests use a synthetic existing runtime and mock speech. No paid API calls. The s
 Issues and contributions are welcome. Please include reproducible steps and avoid posting credentials or personal conversations.
 
 MIT License · © 2026 ARCH_AI · [License](LICENSE)
+
+## Update 2026-10-14
+
+File-only, text+file and completed voice+file input, bounded 1 MiB chunk transport, quiet receipt details, persistent sound/voice toggles and versioned PWA assets are available with the existing runtime attachment contract. The reviewed PDF-reading routing reference is included for your composer. [Update and tested limits](UPDATES_2026-10-14.md). This remains EXPERIMENTAL; the public kit is not a copy of a private owner agent.

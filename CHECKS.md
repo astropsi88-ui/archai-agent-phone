@@ -15,3 +15,9 @@ TESTED в настоящем headless Chromium с синтетическим м�
 UNTESTED/needs_human: ваш backend entrypoint/mapping, owner login на вашем сервере, реальные STT/TTS credentials/gateway, реальные речь/качество голоса/списания, iPhone/Android установка/микрофон/воспроизведение, публичные DNS/TLS/nginx/systemd deployment и восстановление production. Mock не заменяет этих проверок.
 
 В ZIP есть `tests/test_connector.py` и `tests/fake_existing.py` — только синтетические fixtures. После распаковки из корня комплекта: `python3 tests/test_connector.py`. В тестах нет платных вызовов. Фразы и токены тестов искусственные и не подходят для production. SHA256SUMS и MANIFEST.json описывают payload (не самих себя). ZIP checksum рядом с архивом. Самопроверка checksum: `sha256sum -c SHA256SUMS`.
+
+## Проверки обновления 14 октября 2026
+
+20 исходных Python-тестов и 9 новых attachment transport/linkage тестов PASS на Windows. Среди новых проверок — реальные HTTP-запросы через локальный bridge к синтетическому runtime, файл без текста, текст/завершённый голос+fileIds, потерянная квитанция, восстановление edge-процесса без повторного append, типы/размеры/owner/Origin и fingerprint. 29 UI, 12 SW/cache и 12 supplied-decision проверок выполняют настоящие JS-модули в synthetic VM, без настоящего браузера, микрофона, модельной классификации или провайдера. Node 18+ нужен только для этих offline JS-тестов.
+
+Публичный live PDF parser/media reader, durable storage вашего runtime, настоящий мобильный autoplay, all-page content понимание, и end-to-end work dispatch не приняты. Тестовая FileRuntime хранит только искусственные данные в памяти и не является production storage. Не переносите её в рабочий агент. Предыдущее Chromium/mock и Linux доказательство относится к прежнему неизменному коду и не является Linux-проверкой этой версии. Подробнее [обновление](route/07_ATTACHMENTS_AND_UPDATES.md).

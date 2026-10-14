@@ -5,12 +5,19 @@
   let auth=false, binding=null, busy=false, voiceEnabled=false, currentId=null, generation=0;
   let ctx=null, stream=null, input=null, processor=null, silent=null, chunks=[], capture=false, timer=null;
   let source=null, pendingAudio=null, controller=null, pollTimer=null;
-  const polling=new Set();
+  const polling=new Set(), notified=new Set(), heard=new Set();
+  let attachments=false, selected=[], uploadPending=null;
+  const mimeTypes={txt:'text/plain',md:'text/markdown',csv:'text/csv',json:'application/json',pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',mp4:'video/mp4',mov:'video/quicktime',webm:'video/webm'};
+  const prefs={voice:false,signal:false};
+  try {const p=JSON.parse(localStorage.getItem('phone-audio-preferences')||'{}');prefs.voice=p.voice===true;prefs.signal=p.signal===true;}catch{}
+  for(const [id,key] of [['reply-voice','voice'],['reply-signal','signal']]){$(id).checked=prefs[key];$(id).addEventListener('change',()=>{prefs[key]=$(id).checked;try{localStorage.setItem('phone-audio-preferences',JSON.stringify(prefs));}catch{}try{unlock().catch(()=>{});}catch{}});}
   const note=t=>{$('status').textContent=t;};
   const phase=t=>{$('phase').textContent=t;};
   const controls=()=>{
     $('send').disabled=busy||!auth; $('call').disabled=busy||!auth||!voiceEnabled;
     $('record').disabled=busy||!auth||!voiceEnabled; $('stop').disabled=!capture;
+    $('files').disabled=busy||!auth||!attachments;
+    $('reply-voice').disabled=!auth||!voiceEnabled;
     $('enter').disabled=busy; $('refresh').disabled=!auth; $('logout').disabled=!auth;
   };
   function gate(value){auth=value;$('login').hidden=value;$('room').hidden=!value;if(!value){$('history').replaceChildren();binding=null;$('phone').hidden=true;}controls();}
@@ -20,7 +27,8 @@
     return response.json();
   }
   async function refresh(){
-    const session=await api('session');binding={agentId:session.agentId,conversationId:session.conversationId};voiceEnabled=session.voiceEnabled;
+    const session=await api('session');binding={agentId:session.agentId,conversationId:session.conversationId};voiceEnabled=session.voiceEnabled;attachments=session.attachments===true;
+    $('files-note').textContent=attachments?'До 3 файлов: текст 5 МиБ, документы 25 МиБ, медиа 100 МиБ.':'Вложения требуют подключения файлового адаптера существующего агента.';
     $('identity').textContent='Разговор существующего агента подключён';
     $('voice-note').textContent=session.mockVoice?'MOCK: проверка связки. Речь не распознаётся, звук — тихий тестовый сигнал.':'Одна запись — одна реплика вашему агенту. Ответ — синтезированный AI-голос; запросы могут оплачиваться провайдеру.';
     const history=await api('history');
@@ -30,7 +38,7 @@
   async function connect(){try{await refresh();note('Подключён к вашему агенту.');}catch(e){if(e.status===401){gate(false);note('Войдите своей личной фразой.');}else{gate(false);note('Подключение ещё не настроено или сервер недоступен. Нужна проверка server adapter.');}}}
   // Must be invoked directly on user gesture BEFORE awaiting mic/network.
   function unlock(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();return ctx.resume();}
-  function stopSound(){if(source){try{source.stop();}catch{}source=null;}pendingAudio=null;$('play').hidden=true;}
+  function stopSound(){if(source){try{source.stop();}catch{}source=null;}pendingAudio=null;$('play').hidden=true;$('listen').hidden=true;}
   function releaseCapture(){
     clearTimeout(timer);timer=null;capture=false;
     if(processor){processor.onaudioprocess=null;processor.disconnect();processor=null;}
@@ -50,7 +58,7 @@
   }
   function wait(ms){return new Promise(resolve=>{pollTimer=setTimeout(resolve,ms);});}
   async function playPending(){
-    if(!pendingAudio)return;await unlock();stopSourceOnly();source=ctx.createBufferSource();source.buffer=pendingAudio;source.connect(ctx.destination);source.onended=()=>{source=null;phase('Ответ прозвучал. Можно записать следующую реплику.');};source.start();$('play').hidden=true;
+    if(!pendingAudio)return;await unlock();stopSourceOnly();source=ctx.createBufferSource();source.buffer=pendingAudio;source.connect(ctx.destination);source.onended=()=>{source=null;phase('Ответ прозвучал. Можно записать следующую реплику.');};source.start();$('play').hidden=true;$('listen').hidden=true;
   }
   function stopSourceOnly(){if(source){try{source.stop();}catch{}source=null;}}
   async function checkTurn(id,g){
@@ -61,16 +69,18 @@
       if(Date.now()-started>125000){await interrupt('Ожидание закончилось. Обновите историю перед новой попыткой.');return;}
       const turn=await api('turn/'+id,undefined,controller?.signal);
       if(g!==generation)return;
-      const labels={queued:'Принял реплику',transcribing:'Слушаю запись…',thinking:'Агент думает…',speaking:'Готовлю голос…'};phase(labels[turn.status]||turn.status);
+      const labels={queued:'Принял реплику',transcribing:'Слушаю запись…',thinking:'Агент думает…',speaking:'Готовлю голос…'};phase(labels[turn.status]||'Проверяю ответ…');$('receipt').textContent='Запрос: '+id+' · '+turn.status;
       if(turn.status==='done'){
         await refresh();if(g!==generation)return;
-        if(turn.audioUrl){
+        if(!notified.has(id)){notified.add(id);if(prefs.signal&&ctx?.state==='running'&&!document.hidden){const oscillator=ctx.createOscillator(),gain=ctx.createGain();gain.gain.value=.04;oscillator.frequency.value=660;oscillator.connect(gain);gain.connect(ctx.destination);oscillator.start();oscillator.stop(ctx.currentTime+.12);}}
+        if(turn.audioUrl&&prefs.voice&&!heard.has(id)&&!document.hidden){
+          heard.add(id);if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();
           const res=await fetch(turn.audioUrl,{credentials:'same-origin',cache:'no-store',signal:controller?.signal});
           if(!res.ok)throw new Error('audio_expired');const buf=await res.arrayBuffer();const decoded=await ctx.decodeAudioData(buf);
           if(g!==generation||document.hidden)return;pendingAudio=decoded;
-          if(ctx.state==='running')await playPending();else{$('play').hidden=false;phase('Ответ готов. Нажмите «Послушать».');}
+          if(ctx.state==='running')await playPending();else{$('play').hidden=false;$('listen').hidden=false;phase('Ответ готов. Нажмите «Послушать».');}
         }
-        currentId=null;busy=false;controls();note(turn.mock?'MOCK связка выполнена; настоящая речь не проверялась.':'Ответ получен.');return;
+        currentId=null;busy=false;selected=[];$('files').value='';$('message').value='';controls();note(turn.mock?'MOCK связка выполнена; настоящая речь не проверялась.':'Ответ получен.');return;
       }
       if(['failed','cancelled','timed_out','unknown_after_restart'].includes(turn.status)){
         currentId=null;busy=false;controls();await refresh();note('Ответ прерван или не подтверждён. История обновлена. Повтор — только новым действием, он может стоить денег.');return;
@@ -82,7 +92,7 @@
   async function sendTurn(payload){
     const g=generation;busy=true;controller=new AbortController();controls();
     try{
-      await api('turn',{...binding,requestId:currentId,...payload},controller.signal);
+      await api('turn',{...binding,requestId:currentId,replyVoice:voiceEnabled&&prefs.voice,...payload},controller.signal);
       if(g!==generation)return;await checkTurn(currentId,g);
     }catch(e){if(g!==generation)return;busy=true;controls();note('Связь потеряна: отправка могла дойти. Нажмите «Проверить ответ» или прервите. Автоповтора нет.');}
   }
@@ -96,16 +106,46 @@
     const count=chunks.reduce((n,c)=>n+c.length,0),samples=new Float32Array(count);let offset=0;
     for(const c of chunks){samples.set(c,offset);offset+=c.length;}chunks=[];const rate=ctx.sampleRate;releaseCapture();controls();
     if(count/rate<.25){currentId=null;busy=false;controls();phase('Запись слишком короткая. Попробуйте ещё раз.');return;}
-    await sendTurn({audio:encodeWav(samples.subarray(0,Math.floor(rate*30)),rate)});
+    try {
+      const fileIds=await uploadSelected();
+      await sendTurn({fileIds,audio:encodeWav(samples.subarray(0,Math.floor(rate*30)),rate)});
+    } catch {
+      currentId=null;busy=false;controls();
+      note('Файлы пока не подтверждены. Запись не отправлял; проверьте загрузку и запишите реплику снова.');
+    }
+  }
+  $('files').addEventListener('change',()=>{selected=Array.from($('files').files).map(file=>({file,uploadId:crypto.randomUUID(),ready:null}));uploadPending=null;$('files-note').textContent=selected.map(item=>item.file.name).join(', ');});
+  async function uploadSelected(){
+    if(selected.length>3)throw Error('too_many_files');const ids=[];
+    for(const item of selected){
+      if(item.ready){ids.push(item.ready);continue;}
+      const ext=item.file.name.split('.').pop().toLowerCase(),type=mimeTypes[ext];
+      const limit=['txt','md','csv','json'].includes(ext)?5*1024*1024:['pdf','docx'].includes(ext)?25*1024*1024:100*1024*1024;
+      if(!type||!item.file.size||item.file.size>limit)throw Error('file_size_or_type');
+      uploadPending=item;let state;
+      try{state=await api('files/'+item.uploadId);}catch(e){if(e.status!==404)throw e;state=await api('files/begin',{uploadId:item.uploadId,name:item.file.name,type,bytes:item.file.size});}
+      if(state.status==='ready'){item.ready=state.fileId;ids.push(item.ready);continue;}
+      for(let offset=state.offset;offset<item.file.size;){
+        const raw=new Uint8Array(await item.file.slice(offset,offset+1024*1024).arrayBuffer());
+        const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',raw));const sha256=Array.from(digest,b=>b.toString(16).padStart(2,'0')).join('');let binary='';
+        for(let i=0;i<raw.length;i+=8192)binary+=String.fromCharCode(...raw.subarray(i,i+8192));
+        state=await api('files/chunk',{uploadId:item.uploadId,offset,base64:btoa(binary),sha256});
+        if(state.offset!==offset+raw.length)throw Error('file_offset');offset=state.offset;phase('Загружаю файл… '+Math.round(offset/item.file.size*100)+'%');
+      }
+      state=await api('files/finish',{uploadId:item.uploadId});if(state.status!=='ready'||state.offset!==item.file.size)throw Error('file_incomplete');item.ready=state.fileId;ids.push(item.ready);
+    }
+    uploadPending=null;return ids;
   }
   $('login').addEventListener('submit',async e=>{
     e.preventDefault();if(busy)return;busy=true;controls();
     try{await api('login',{phrase:$('phrase').value});$('phrase').value='';await refresh();note('На связи.');}catch{note('Вход или подключение не подтверждены. Проверьте фразу и настройки сервера.');}finally{busy=false;controls();}
   });
   $('compose').addEventListener('submit',async e=>{
-    e.preventDefault();if(busy||!auth||!$('message').value.trim())return;
+    e.preventDefault();if(busy||!auth||(!$('message').value.trim()&&!selected.length))return;
     if(!navigator.onLine){note('Нет сети. Сообщение останется на экране и не отправится автоматически.');return;}
-    stopSound();generation++;currentId=crypto.randomUUID();const text=$('message').value;$('message').value='';await sendTurn({message:text});
+    stopSound();try{unlock().catch(()=>{});}catch{}
+    busy=true;controls();
+    try {const fileIds=await uploadSelected();generation++;currentId=crypto.randomUUID();const text=$('message').value;await sendTurn({message:text,fileIds});if(!busy){$('message').value='';selected=[];$('files').value='';}}catch{busy=false;controls();note('Загрузка не подтверждена. Выбранные файлы сохранены на экране. «Проверить ответ» сначала проверит состояние; повтора отправки нет.');}
   });
   $('call').addEventListener('click',()=>{if(!auth||busy)return;try{unlock().catch(()=>note('Нажмите запись, чтобы разрешить звук.'));$('phone').hidden=false;stopSound();phase('Готов к записи');}catch{note('Браузер не поддерживает AudioContext.');}});
   $('record').addEventListener('click',async()=>{
@@ -120,9 +160,10 @@
   });
   $('stop').addEventListener('click',stopRecord);
   $('interrupt').addEventListener('click',async()=>{await interrupt();$('phone').hidden=true;});
+  $('listen').addEventListener('click',()=>{playPending().catch(()=>note('Не удалось воспроизвести ответ.'));});
   $('play').addEventListener('click',()=>{playPending().catch(()=>note('Не удалось воспроизвести. Обновите ответ без новой отправки.'));});
   $('refresh').addEventListener('click',async()=>{
-    try{await refresh();if(currentId&&!capture){controller=new AbortController();await checkTurn(currentId,generation);}else note('История обновлена.');}catch{note('Пока нет связи. Запрос повторно не отправлял.');}
+    try{if(uploadPending){const r=await api('files/'+uploadPending.uploadId);note(r.status==='ready'?'Файл сохранён. Нажмите «Отправить», чтобы передать его в разговор.':'Загрузка сохранена до '+r.offset+' байт. Для продолжения нажмите «Отправить».');return;}await refresh();if(currentId&&!capture){controller=new AbortController();await checkTurn(currentId,generation);}else note('История обновлена.');}catch{note('Пока нет связи. Запрос повторно не отправлял.');}
   });
   $('logout').addEventListener('click',async()=>{await interrupt();try{await api('logout',{});$('message').value='';gate(false);note('Вы вышли.');}catch{note('Выход сервером не подтверждён. Повторите, когда вернётся связь.');}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)interrupt('Приложение ушло в фон: запись и звук остановлены.');});
